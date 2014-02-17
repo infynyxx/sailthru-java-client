@@ -10,6 +10,7 @@ import com.sailthru.client.http.SailthruHttpClient;
 import com.sailthru.client.params.ApiFileParams;
 import com.sailthru.client.params.ApiParams;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -19,16 +20,28 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.zip.GZIPInputStream;
+
+import org.apache.http.Header;
+import org.apache.http.HeaderElement;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpException;
+import org.apache.http.HttpRequest;
+import org.apache.http.HttpRequestInterceptor;
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpResponseInterceptor;
 import org.apache.http.HttpVersion;
 import org.apache.http.conn.scheme.PlainSocketFactory;
 import org.apache.http.conn.scheme.Scheme;
 import org.apache.http.conn.scheme.SchemeRegistry;
 import org.apache.http.conn.ssl.SSLSocketFactory;
+import org.apache.http.entity.HttpEntityWrapper;
 import org.apache.http.impl.conn.tsccm.ThreadSafeClientConnManager;
 import org.apache.http.params.BasicHttpParams;
 import org.apache.http.params.HttpConnectionParams;
 import org.apache.http.params.HttpParams;
 import org.apache.http.params.HttpProtocolParams;
+import org.apache.http.protocol.HttpContext;
 
 /**
  * Abstract class exposing genric API calls for Sailthru API as per http://docs.sailthru.com/api
@@ -43,6 +56,9 @@ public abstract class AbstractSailthruClient {
     public static final int DEFAULT_HTTPS_PORT = 443;
     public static final String DEFAULT_USER_AGENT = "Sailthru Java Client";
     public static final String DEFAULT_ENCODING = "UTF-8";
+
+    private static final String HEADER_ACCEPT_ENCODING = "Accept-Encoding";
+    private static final String ENVODING_GZIP = "gzip";
 
     //HTTP methods supported by Sailthru API
     public static enum HttpRequestMethod {
@@ -71,6 +87,29 @@ public abstract class AbstractSailthruClient {
      */
     public AbstractSailthruClient(String apiKey, String apiSecret, String apiUrl) {
         this(apiKey, apiSecret, apiUrl, new DefaultSailthruHttpClientConfiguration());
+
+        httpClient.addRequestInterceptor(new HttpRequestInterceptor() {
+            public void process(HttpRequest httpRequest, HttpContext httpContext) throws HttpException, IOException {
+                if (!httpRequest.containsHeader(HEADER_ACCEPT_ENCODING)) {
+                    httpRequest.addHeader(HEADER_ACCEPT_ENCODING, ENVODING_GZIP);
+                }
+            }
+        });
+
+        httpClient.addResponseInterceptor(new HttpResponseInterceptor() {
+            public void process(HttpResponse httpResponse, HttpContext httpContext) throws HttpException, IOException {
+                HttpEntity entity = httpResponse.getEntity();
+                Header encoding = entity.getContentEncoding();
+                if (encoding != null) {
+                    for (final HeaderElement element : encoding.getElements()) {
+                        if (element.getName().equalsIgnoreCase(ENVODING_GZIP)) {
+                            httpResponse.setEntity(new InflatingEntity(httpResponse.getEntity()));
+                            break;
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /**
@@ -311,5 +350,21 @@ public abstract class AbstractSailthruClient {
     
     public void setCustomHeaders(Map<String, String> headers) {
         customHeaders = headers;
+    }
+
+    private static class InflatingEntity extends HttpEntityWrapper {
+        public InflatingEntity(HttpEntity wrapped) {
+            super(wrapped);
+        }
+
+        @Override
+        public InputStream getContent() throws IOException {
+            return new GZIPInputStream(wrappedEntity.getContent());
+        }
+
+        @Override
+        public long getContentLength() {
+            return -1;
+        }
     }
 }
